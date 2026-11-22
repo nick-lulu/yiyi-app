@@ -23,6 +23,10 @@
   transition: transform 160ms ease-out;
 }
 
+#model.turnable-model [data-garment-category="top"] {
+  filter: drop-shadow(0 1px 1px #20231c38);
+}
+
 #model.dragging-model {
   cursor: grabbing;
 }

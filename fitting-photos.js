@@ -3,15 +3,20 @@
   const labels = {top:'上衣', bottom:'下装', shoes:'鞋子'};
   // Anchors use the pixel coordinates of each model before body scaling.
   const modelFits = {
-    self: {top:[112,94,171,183], bottom:[130,261,132,296], feet:[147,244], sole:585,
-      shirt:'M174 98 Q198 109 219 97 L224 104 Q264 108 270 165 L267 169 L242 168 L254 268 Q201 281 143 269 L154 166 L125 166 Q125 111 169 103Z',
-      footwear:'M143 546L168 550L175 568V590H118V568Z M224 550L249 546L272 568V590H218V568Z'},
-    partner: {top:[113,95,170,172], bottom:[129,257,139,303], feet:[153,244], sole:588,
-      shirt:'M177 94 Q199 104 220 97 L226 104 Q263 108 269 158 L246 164 L249 264 Q199 272 146 262 L151 160 L126 158 Q129 111 171 103Z',
-      footwear:'M144 554L173 550L181 574V593H127V575Z M221 550L250 554L268 575V593H217V574Z'}
+    self: {neck:[198,95], shoulders:133, waist:[198,265,106], hips:116, feet:[148,244], hem:555, sole:585,
+      shirt:'M173 97 Q198 108 221 96 L231 102 Q277 106 280 168 L243 168 L255 269 Q201 280 143 269 L154 166 L116 166 Q116 108 168 102Z',
+      pants:'M144 264 Q198 272 252 264 L261 312 L252 547 L223 553 L198 343 L170 552 L141 548 L134 315Z',
+      footwear:'M140 548L170 551L178 572V592H117V568Z M221 551L251 548L273 569V592H216V567Z'},
+    partner: {neck:[198,93], shoulders:128, waist:[199,260,107], hips:117, feet:[153,244], hem:560, sole:588,
+      shirt:'M175 94 Q200 104 220 97 L229 103 Q273 108 278 158 L246 164 L251 264 Q199 272 146 262 L151 160 L119 158 Q121 108 170 101Z',
+      pants:'M146 260 Q198 267 250 260 L262 313 L257 550 L225 560 L200 349 L174 559 L139 552 L136 312Z',
+      footwear:'M141 553L175 552L182 575V595H126V575Z M219 552L252 553L272 575V595H215V574Z'}
   };
   const photoZones = {top:[27,24,46,31], bottom:[34,51,32,40], shoes:[31,82,38,15]};
   const cutouts = new Map();
+  const fittedTrousers = new WeakMap();
+  // The catalog's white tee and backdrop share a color. Trace the photographed edge.
+  const whiteTeeEdge = 'M149 48 Q155 47 162 52 Q190 58 211 47 Q237 58 261 68 Q312 116 324 135 L281 181 L265 174 L271 319 Q183 321 87 318 L96 175 L78 183 L33 137 Q54 108 94 74 Q110 66 149 48Z';
   const NS = 'http://www.w3.org/2000/svg';
   let fittingRevision = 0;
   let fullBodyPhoto = null;
@@ -134,41 +139,77 @@
     canvas.width = Math.max(1, Math.round(width * scale));
     canvas.height = Math.max(1, Math.round(height * scale));
     const ctx = canvas.getContext('2d', {willReadFrequently:true});
+    const traceTee = !garment.image && garment.id === 't2';
+    if (traceTee) {
+      ctx.save();
+      ctx.scale(canvas.width / 356, canvas.height / 356);
+      ctx.clip(new Path2D(whiteTeeEdge));
+      ctx.setTransform(1,0,0,1,0,0);
+    }
     ctx.drawImage(image, x, y, width, height, 0, 0, canvas.width, canvas.height);
+    if (traceTee) ctx.restore();
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const bounds = isolate(pixels, !garment.image && garment.id === 't2' ? 17 : 44);
+    const bounds = isolate(pixels);
     if (!bounds) return null;
     ctx.putImageData(pixels, 0, 0);
     const output = document.createElement('canvas');
     [output.width, output.height] = bounds.slice(2);
     output.getContext('2d').drawImage(canvas, ...bounds, 0, 0, output.width, output.height);
     const cutout = {src:output.toDataURL('image/png'), ratio:output.width / output.height};
-    if (garment.cat === 'shoes') cutout.pair = shoePieces(output, !garment.image && garment.id === 's3');
-    else cutout.anchor = garmentAnchor(output, garment.cat);
+    if (garment.cat === 'shoes') cutout.pair = shoePieces(output, garment.image ? null : garment.id);
+    else cutout.outline = garmentOutline(output, garment.cat);
     return cutout;
   }
 
-  function garmentAnchor(canvas, category) {
+  function garmentOutline(canvas, category) {
     const {width, height} = canvas;
     const {data} = canvas.getContext('2d').getImageData(0, 0, width, height);
-    // Sample a few rows to avoid using a collar opening or a single loose edge as the anchor.
-    const start = category === 'top' ? .23 : .06;
-    const rows = [start, start + .025, start + .05].flatMap(fraction => {
-      const y = Math.floor(height * fraction);
-      let left = 0;
-      let right = width - 1;
-      while (left < width && data[(y * width + left) * 4 + 3] < 128) left++;
-      while (right > left && data[(y * width + right) * 4 + 3] < 128) right--;
-      return right > left ? [{center:(left + right) / (2 * width), span:(right - left + 1) / width}] : [];
-    });
-    if (!rows.length) return {center:.5, span:1};
-    return {
-      center:rows.reduce((sum,row) => sum + row.center, 0) / rows.length,
-      span:rows.reduce((sum,row) => sum + row.span, 0) / rows.length
+    const sample = (levels, start = 0, end = width) => {
+      const rows = levels.flatMap(level => {
+        const y = Math.floor(height * level);
+        let left = start, right = end - 1;
+        while (left < end && data[(y * width + left) * 4 + 3] < 128) left++;
+        while (right > left && data[(y * width + right) * 4 + 3] < 128) right--;
+        return right > left ? [{center:(left + right) / (2 * width), span:(right - left + 1) / width}] : [];
+      });
+      if (!rows.length) return {center:(start + end) / (2 * width), span:(end - start) / width};
+      return {
+        center:rows.reduce((sum,row) => sum + row.center, 0) / rows.length,
+        span:rows.reduce((sum,row) => sum + row.span, 0) / rows.length
+      };
     };
+    if (category === 'top') {
+      const shoulders = sample([.16,.20,.24]);
+      const hem = [.40,.45,.50,.55,.60].map(level => {
+        const x = Math.floor(width * level);
+        let y = height - 1;
+        while (y > 0 && data[(y * width + x) * 4 + 3] < 128) y--;
+        return (y + 1) / height;
+      }).sort((a,b) => a - b)[2];
+      return {collar:sample([.04,.08,.12]), shoulders, hem};
+    }
+    const cuffs = [.88,.92,.96];
+    const middle = Math.floor(width / 2);
+    return {waist:sample([.05,.08,.11]), hips:sample([.21,.25,.29]),
+      cuffs:[sample(cuffs,0,middle).center, sample(cuffs,middle,width).center], canvas};
   }
 
-  function shoePieces(canvas, overlappingBoots) {
+  function shoeSeam(columns, forceSplit) {
+    const width = columns.length;
+    const middle = (width - 1) / 2;
+    let seam = Math.round(middle);
+    let best = Infinity;
+    const peak = Math.max(...columns);
+    for (let x = Math.ceil(width * .33); x <= Math.floor(width * .67); x++) {
+      const score = columns[x] + Math.abs(x - middle) / width * peak * .16;
+      if (score < best) { best = score; seam = x; }
+    }
+    const left = Math.max(...columns.slice(0, seam));
+    const right = Math.max(...columns.slice(seam + 1));
+    return forceSplit || (Math.min(left,right) > 0 && columns[seam] < Math.min(left,right) * .55) ? seam : null;
+  }
+
+  function shoePieces(canvas, catalogId) {
     const {width, height} = canvas;
     const {data} = canvas.getContext('2d').getImageData(0, 0, width, height);
     const columns = Array.from({length:width}, (_, x) => {
@@ -176,7 +217,7 @@
       for (let y = 0; y < height; y++) if (data[(y * width + x) * 4 + 3] >= 64) count++;
       return count;
     });
-    const heelGap = columns.findIndex((count, x) => x >= width * .32 && x <= width * .68 && count <= height * .02);
+    const seam = shoeSeam(columns, catalogId === 's1' || catalogId === 's2');
     const piece = (start, end, trace) => {
       const copy = document.createElement('canvas');
       copy.width = end - start;
@@ -196,16 +237,16 @@
       trimmed.getContext('2d').drawImage(copy, ...bounds, 0, 0, trimmed.width, trimmed.height);
       return {src:trimmed.toDataURL('image/png'), ratio:trimmed.width / trimmed.height};
     };
-    if (overlappingBoots) {
+    if (catalogId === 's3') {
       const boot = piece(0, width, [[.66,.11],[1,0],[1,1],[.24,1],[.28,.85],[.55,.63],[.66,.43]]);
       if (boot) return [{...boot, flip:true}, boot];
     }
-    if (heelGap >= 0) {
-      const pair = [piece(0, heelGap), piece(heelGap, width)];
+    if (seam !== null) {
+      const pair = [piece(0, seam), piece(seam, width)];
       if (pair.every(Boolean)) return pair;
     }
-    const single = {src:canvas.toDataURL('image/png'), ratio:width / height};
-    return [single, {...single, flip:true}];
+    // An ambiguous photo is drawn once as a group. Mirroring it can put two shoes on each foot.
+    return null;
   }
 
   function getCutout(garment) {
@@ -234,7 +275,7 @@
 
   function garmentLayer(garment, cutout, [x, y, width, height], foot) {
     const layer = document.createElementNS(NS, 'image');
-    const attributes = {x,y,width,height,href:cutout.src,preserveAspectRatio:'none','data-garment':garment.id};
+    const attributes = {x,y,width,height,href:cutout.src,preserveAspectRatio:'none','data-garment':garment.id,'data-garment-category':garment.cat};
     if (foot) attributes['data-foot'] = foot;
     if (cutout.flip) attributes.transform = `translate(${2 * x + width} 0) scale(-1 1)`;
     for (const [key, value] of Object.entries(attributes)) layer.setAttribute(key, value);
@@ -248,6 +289,47 @@
     return [center - width / 2, sole - height, width, height];
   }
 
+  function fitTrouserLegs(outline, fit) {
+    let cache = fittedTrousers.get(outline);
+    if (!cache) fittedTrousers.set(outline, cache = new Map());
+    if (cache.has(fit)) return cache.get(fit);
+
+    const {canvas, waist, hips, cuffs} = outline;
+    const [center, , waistWidth] = fit.waist;
+    const width = Math.max(110, Math.min(155, fit.hips / hips.span));
+    const widthAtWaist = Math.max(95, Math.min(160, waistWidth / waist.span));
+    const output = document.createElement('canvas');
+    const startX = 79;
+    const boxWidth = 240;
+    const resolution = 2;
+    output.width = boxWidth * resolution;
+    output.height = canvas.height;
+    const ctx = output.getContext('2d');
+    const split = Math.round(canvas.width * ((cuffs[0] + cuffs[1]) / 2));
+    const offset = center - hips.center * width;
+    const corrections = cuffs.map((cuff, i) => fit.feet[i] - (offset + cuff * width));
+    for (let row = 0; row < canvas.height; row++) {
+      const level = row / canvas.height;
+      const waistBlend = Math.max(0, 1 - level / .28);
+      const hemBlend = Math.max(0, (level - .43) / .57);
+      const rowWidth = width + (widthAtWaist - width) * waistBlend;
+      const rowCenter = hips.center + (waist.center - hips.center) * waistBlend;
+      const left = (center - rowCenter * rowWidth - startX) * resolution;
+      const scale = rowWidth * resolution / canvas.width;
+      if (!hemBlend) {
+        ctx.drawImage(canvas, 0,row,canvas.width,1, left,row,canvas.width * scale,1);
+      } else {
+        ctx.drawImage(canvas, 0,row,split,1, left + corrections[0] * hemBlend * resolution,row,split * scale,1);
+        ctx.drawImage(canvas, split,row,canvas.width - split,1,
+          left + split * scale + corrections[1] * hemBlend * resolution,row,(canvas.width - split) * scale,1);
+      }
+    }
+    const result = {cutout:{src:output.toDataURL('image/png')},
+      box:[startX,fit.waist[1],boxWidth,fit.hem - fit.waist[1]]};
+    cache.set(fit, result);
+    return result;
+  }
+
   function fitLayers(garment, cutout, group, fit) {
     const {cat} = garment;
     if (!fit) {
@@ -259,17 +341,31 @@
     }
     if (cat === 'shoes') {
       const aspect = Number(group.dataset.avatarScaleX) / Number(group.dataset.avatarScaleY);
+      if (!cutout.pair) {
+        const [left,right] = fit.feet;
+        return [garmentLayer(garment, cutout, shoeBox(cutout,(left + right) / 2,fit.sole,right - left + 43,78,aspect))];
+      }
       return cutout.pair.map((shoe, index) => {
-        const width = Math.max(45, Math.min(65, 47 / aspect));
-        return garmentLayer(garment, shoe, shoeBox(shoe,fit.feet[index],fit.sole,width,74,aspect), index === 0 ? 'left' : 'right');
+        const width = Math.max(41, Math.min(59, 45 / aspect));
+        return garmentLayer(garment, shoe, shoeBox(shoe,fit.feet[index],fit.sole,width,76,aspect), index === 0 ? 'left' : 'right');
       });
     }
-    const [x,y,baseWidth,baseHeight] = fit[cat];
-    const {center, span} = cutout.anchor;
-    const anchorWidth = cat === 'top' ? baseWidth * .84 : baseWidth * .81;
-    const width = Math.max(baseWidth * .88, Math.min(baseWidth * 1.22, anchorWidth / span));
-    const height = garment.kind === 'skirt' ? baseHeight * .70 : baseHeight;
-    return [garmentLayer(garment, cutout, [x + baseWidth / 2 - width * center,y,width,height])];
+    if (cat === 'top') {
+      const {collar, shoulders, hem} = cutout.outline;
+      const [neckX,neckY] = fit.neck;
+      const width = Math.max(143, Math.min(187, fit.shoulders / shoulders.span));
+      const center = shoulders.center + Math.max(-.045, Math.min(.045, collar.center - shoulders.center)) * .65;
+      const height = (fit.waist[1] - neckY + 8) / Math.max(.84, hem);
+      return [garmentLayer(garment, cutout, [neckX - width * center,neckY,width,height])];
+    }
+    if (garment.kind === 'skirt') {
+      const {waist} = cutout.outline;
+      const [center,y,waistWidth] = fit.waist;
+      const width = Math.max(126, Math.min(190, waistWidth / waist.span));
+      return [garmentLayer(garment, cutout, [center - width * waist.center,y,width,(fit.hem - y) * .70])];
+    }
+    const {cutout:shaped, box} = fitTrouserLegs(cutout.outline, fit);
+    return [garmentLayer(garment, shaped, box)];
   }
 
   function maskBase(group, paths) {
@@ -281,7 +377,7 @@
     mask.setAttribute('y', '0');
     mask.setAttribute('width', '400');
     mask.setAttribute('height', '600');
-    mask.innerHTML = `<rect width="400" height="600" fill="white"/><path d="${paths.join(' ')}" fill="black"/>`;
+    mask.innerHTML = `<rect width="400" height="600" fill="white"/>${paths.map(d => `<path d="${d}" fill="black"/>`).join('')}`;
     const base = group.querySelector('[data-avatar-base]');
     base.before(mask);
     base.setAttribute('mask', `url(#${mask.id})`);
@@ -318,10 +414,14 @@
         group.insertBefore(layer, group.querySelector('[data-face-overlay]'));
       }
       if (fit && garment.cat === 'top') masks.push(fit.shirt);
+      if (fit && garment.cat === 'bottom' && garment.kind !== 'skirt') masks.push(fit.pants);
       if (fit && garment.cat === 'shoes') masks.push(fit.footwear);
     });
     if (fit) maskBase(group, masks);
-    status.textContent = missing.length ? `${missing.join('、')}照片背景未能分离。请用纯色背景平铺重拍后试穿。` : '';
+    const shoeIndex = garments.findIndex(garment => garment.cat === 'shoes');
+    const shoes = sources[shoeIndex];
+    status.textContent = missing.length ? `${missing.join('、')}照片背景未能分离。请用纯色背景平铺重拍后试穿。`
+      : fit && shoes && !shoes.pair ? '这张鞋照按整张预览。将两只鞋并排留出间距拍摄，即可分别穿到左右脚。' : '';
     $('#previewNote').textContent = fit
       ? '选衣后自动试穿。拖动模特可看正面透视，实际合身度以实穿为准。'
       : '全身照搭配预览。实际合身度以实穿为准。';

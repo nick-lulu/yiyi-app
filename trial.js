@@ -78,7 +78,7 @@ if(PUBLIC_MODE){
   $('#deleteMyData').textContent='删除本设备数据';
   $('#deleteDataDialog .muted').textContent='这会删除当前浏览器中的衣物、本人照片和测试记录，无法撤销。建议先导出备份；其他设备的数据不受影响。';
   $('#confirmDelete').textContent='确认删除本设备数据';
-  $('footer small').textContent='v0.8.0 · GitHub Pages 公开手机版 · 数据存本机';
+  $('footer small').textContent='v0.8.1 · GitHub Pages 公开手机版 · 数据存本机';
 }
 
 initTrial();
