@@ -74,8 +74,8 @@
     const scaleX = 1 + (proportions.size - 100) / 150;
     const scaleY = proportions.height / 175;
     container.innerHTML = `<svg class="realistic-model" viewBox="0 0 400 790" role="img" aria-label="${label}">
-      <g data-avatar-scale-x="${scaleX}" data-avatar-scale-y="${scaleY}" transform="translate(200 766) scale(${scaleX} ${scaleY}) translate(-200 -590)">
-        <image href="assets/${profile().filename}" x="50" width="300" height="600" preserveAspectRatio="xMidYMid meet"/>
+      <g data-avatar-profile="${profileId}" data-avatar-scale-x="${scaleX}" data-avatar-scale-y="${scaleY}" transform="translate(200 766) scale(${scaleX} ${scaleY}) translate(-200 -590)">
+        <image data-avatar-base href="assets/${profile().filename}" x="50" width="300" height="600" preserveAspectRatio="xMidYMid meet"/>
       </g></svg>`;
   }
 

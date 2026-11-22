@@ -1,4 +1,4 @@
-const CACHE='yiyi-pwa-0.7.0';
+const CACHE='yiyi-pwa-0.8.0';
 const CORE=['./','index.html','style.css','realism.css','trial.css','mobile.css','trial-core.js','daily-engine.js','app.js','realism.js','trial.js','pwa.js','personal-avatar.js','personal-avatar.css','fitting-photos.js','fitting-photos.css','manifest.webmanifest','assets/wardrobe-photography.png','assets/fitting-model.png','assets/fitting-model-woman.png','assets/icon-192.png','assets/icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(CACHE);await cache.addAll(CORE.map(p=>new Request(new URL(p,self.registration.scope),{cache:'reload'})));await self.skipWaiting()})()));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const name of await caches.keys())if(name.startsWith('yiyi-pwa-')&&name!==CACHE)await caches.delete(name);await self.clients.claim()})()));

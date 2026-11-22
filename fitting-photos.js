@@ -1,7 +1,15 @@
 (() => {
   const categories = ['top', 'bottom', 'shoes'];
   const labels = {top:'上衣', bottom:'下装', shoes:'鞋子'};
-  const modelZones = {top:[121,100,158,171], bottom:[131,262,138,293], shoes:[123,518,154,71]};
+  // Anchors use the pixel coordinates of each model before body scaling.
+  const modelFits = {
+    self: {top:[112,94,171,183], bottom:[130,261,132,296], feet:[147,244], sole:585,
+      shirt:'M174 98 Q198 109 219 97 L224 104 Q264 108 270 165 L267 169 L242 168 L254 268 Q201 281 143 269 L154 166 L125 166 Q125 111 169 103Z',
+      footwear:'M143 546L168 550L175 568V590H118V568Z M224 550L249 546L272 568V590H218V568Z'},
+    partner: {top:[113,95,170,172], bottom:[129,257,139,303], feet:[153,244], sole:588,
+      shirt:'M177 94 Q199 104 220 97 L226 104 Q263 108 269 158 L246 164 L249 264 Q199 272 146 262 L151 160 L126 158 Q129 111 171 103Z',
+      footwear:'M144 554L173 550L181 574V593H127V575Z M221 550L250 554L268 575V593H217V574Z'}
+  };
   const photoZones = {top:[27,24,46,31], bottom:[34,51,32,40], shoes:[31,82,38,15]};
   const cutouts = new Map();
   const NS = 'http://www.w3.org/2000/svg';
@@ -9,6 +17,8 @@
   let fullBodyPhoto = null;
   let photoMode = false;
   let photoRevision = 0;
+  let angle = 0;
+  let drag;
 
   const controls = document.createElement('div');
   controls.className = 'fitting-controls';
@@ -19,6 +29,43 @@
     <div id="fittingPhotoOptions" hidden><label>更换正面全身照<input type="file" id="fittingPhotoFile" accept="image/jpeg,image/png,image/webp"></label><p class="fitting-hint">请使用正面站立、头和鞋都入镜、人物居中的照片。衣服会按固定区域叠放。</p><button type="button" class="outline" id="clearFittingPhoto">删除全身照</button></div>
     <p role="status" id="fittingPhotoStatus" class="fitting-hint"></p>`;
   $('.avatar-profile-picker').after(controls);
+  const stage = $('#model');
+  const mirror = $('.mirror');
+  const turnButton = $('#rotate');
+  const angles = document.createElement('div');
+  angles.className = 'fitting-angles';
+  angles.hidden = true;
+  angles.innerHTML = `<label for="fittingAngle">转动预览</label>
+    <input id="fittingAngle" type="range" min="-35" max="35" value="0" aria-valuetext="正面">
+    <button type="button" class="outline">回正</button>`;
+  mirror.after(angles);
+  const angleInput = angles.querySelector('input');
+  angles.querySelector('button').onclick = () => setAngle(0);
+  angleInput.oninput = () => setAngle(angleInput.valueAsNumber);
+  turnButton.textContent = '↻';
+  turnButton.setAttribute('aria-label', '切换转动预览角度');
+  turnButton.onclick = () => setAngle(angle > 0 ? -26 : angle < 0 ? 0 : 26);
+
+  function setAngle(value) {
+    angle = Math.max(-35, Math.min(35, Math.round(value)));
+    stage.style.setProperty('--fitting-angle', `${angle}deg`);
+    angleInput.value = angle;
+    angleInput.setAttribute('aria-valuetext', angle === 0 ? '正面' : `${angle < 0 ? '向左' : '向右'} ${Math.abs(angle)} 度`);
+  }
+
+  stage.addEventListener('pointerdown', event => {
+    if (!stage.classList.contains('turnable-model') || !event.isPrimary || event.button !== 0) return;
+    stage.setPointerCapture(event.pointerId);
+    drag = {x:event.clientX, angle};
+    stage.classList.add('dragging-model');
+  });
+  stage.addEventListener('pointermove', event => {
+    if (drag && stage.hasPointerCapture(event.pointerId)) setAngle(drag.angle + (event.clientX - drag.x) / 3);
+  });
+  stage.addEventListener('lostpointercapture', () => {
+    drag = null;
+    stage.classList.remove('dragging-model');
+  });
   const picker = category => controls.querySelector(`[data-fitting-cat="${category}"]`);
   const active = () => previewMode === 'shape';
 
@@ -95,7 +142,70 @@
     const output = document.createElement('canvas');
     [output.width, output.height] = bounds.slice(2);
     output.getContext('2d').drawImage(canvas, ...bounds, 0, 0, output.width, output.height);
-    return {src:output.toDataURL('image/png'), ratio:output.width / output.height};
+    const cutout = {src:output.toDataURL('image/png'), ratio:output.width / output.height};
+    if (garment.cat === 'shoes') cutout.pair = shoePieces(output, !garment.image && garment.id === 's3');
+    else cutout.anchor = garmentAnchor(output, garment.cat);
+    return cutout;
+  }
+
+  function garmentAnchor(canvas, category) {
+    const {width, height} = canvas;
+    const {data} = canvas.getContext('2d').getImageData(0, 0, width, height);
+    // Sample a few rows to avoid using a collar opening or a single loose edge as the anchor.
+    const start = category === 'top' ? .23 : .06;
+    const rows = [start, start + .025, start + .05].flatMap(fraction => {
+      const y = Math.floor(height * fraction);
+      let left = 0;
+      let right = width - 1;
+      while (left < width && data[(y * width + left) * 4 + 3] < 128) left++;
+      while (right > left && data[(y * width + right) * 4 + 3] < 128) right--;
+      return right > left ? [{center:(left + right) / (2 * width), span:(right - left + 1) / width}] : [];
+    });
+    if (!rows.length) return {center:.5, span:1};
+    return {
+      center:rows.reduce((sum,row) => sum + row.center, 0) / rows.length,
+      span:rows.reduce((sum,row) => sum + row.span, 0) / rows.length
+    };
+  }
+
+  function shoePieces(canvas, overlappingBoots) {
+    const {width, height} = canvas;
+    const {data} = canvas.getContext('2d').getImageData(0, 0, width, height);
+    const columns = Array.from({length:width}, (_, x) => {
+      let count = 0;
+      for (let y = 0; y < height; y++) if (data[(y * width + x) * 4 + 3] >= 64) count++;
+      return count;
+    });
+    const heelGap = columns.findIndex((count, x) => x >= width * .32 && x <= width * .68 && count <= height * .02);
+    const piece = (start, end, trace) => {
+      const copy = document.createElement('canvas');
+      copy.width = end - start;
+      copy.height = height;
+      const ctx = copy.getContext('2d');
+      if (trace) {
+        ctx.beginPath();
+        for (const [x, y] of trace) ctx.lineTo(x * width, y * height);
+        ctx.closePath();
+        ctx.clip();
+      }
+      ctx.drawImage(canvas, -start, 0);
+      const bounds = isolate(ctx.getImageData(0, 0, copy.width, height));
+      if (!bounds) return null;
+      const trimmed = document.createElement('canvas');
+      [trimmed.width, trimmed.height] = bounds.slice(2);
+      trimmed.getContext('2d').drawImage(copy, ...bounds, 0, 0, trimmed.width, trimmed.height);
+      return {src:trimmed.toDataURL('image/png'), ratio:trimmed.width / trimmed.height};
+    };
+    if (overlappingBoots) {
+      const boot = piece(0, width, [[.66,.11],[1,0],[1,1],[.24,1],[.28,.85],[.55,.63],[.66,.43]]);
+      if (boot) return [{...boot, flip:true}, boot];
+    }
+    if (heelGap >= 0) {
+      const pair = [piece(0, heelGap), piece(heelGap, width)];
+      if (pair.every(Boolean)) return pair;
+    }
+    const single = {src:canvas.toDataURL('image/png'), ratio:width / height};
+    return [single, {...single, flip:true}];
   }
 
   function getCutout(garment) {
@@ -122,26 +232,68 @@
     return layer;
   }
 
-  function overlayBox(garment, cutout, group, usingPhoto) {
-    const box = (usingPhoto ? photoZones : modelZones)[garment.cat];
-    const [x,y,width,height] = box;
-    if (garment.cat !== 'shoes') {
-      if (garment.kind === 'skirt') return [x,y,width,height * .70];
-      return box;
-    }
-    // Match the physical image ratio after the model or photo viewport is scaled.
-    const viewport = usingPhoto ? group.getBoundingClientRect() : null;
-    const axisRatio = usingPhoto ? (viewport.width / viewport.height || fullBodyPhoto.width / fullBodyPhoto.height) :
-      Number(group.dataset.avatarScaleX || 1) / Number(group.dataset.avatarScaleY || 1);
+  function garmentLayer(garment, cutout, [x, y, width, height], foot) {
+    const layer = document.createElementNS(NS, 'image');
+    const attributes = {x,y,width,height,href:cutout.src,preserveAspectRatio:'none','data-garment':garment.id};
+    if (foot) attributes['data-foot'] = foot;
+    if (cutout.flip) attributes.transform = `translate(${2 * x + width} 0) scale(-1 1)`;
+    for (const [key, value] of Object.entries(attributes)) layer.setAttribute(key, value);
+    return layer;
+  }
+
+  function shoeBox(cutout, center, sole, maxWidth, maxHeight, axisRatio) {
     const ratio = cutout.ratio / axisRatio;
-    const shoeWidth = Math.min(width, height * ratio);
-    const shoeHeight = shoeWidth / ratio;
-    return [x + (width - shoeWidth) / 2, y + height - shoeHeight, shoeWidth, shoeHeight];
+    const width = Math.min(maxWidth, maxHeight * ratio);
+    const height = width / ratio;
+    return [center - width / 2, sole - height, width, height];
+  }
+
+  function fitLayers(garment, cutout, group, fit) {
+    const {cat} = garment;
+    if (!fit) {
+      const [x,y,width,height] = photoZones[cat];
+      if (cat !== 'shoes') return [garmentLayer(garment, cutout, [x,y,width,garment.kind === 'skirt' ? height * .70 : height])];
+      const view = group.getBoundingClientRect();
+      const aspect = view.width / view.height || fullBodyPhoto.width / fullBodyPhoto.height;
+      return [garmentLayer(garment, cutout, shoeBox(cutout,x + width / 2,y + height,width,height,aspect))];
+    }
+    if (cat === 'shoes') {
+      const aspect = Number(group.dataset.avatarScaleX) / Number(group.dataset.avatarScaleY);
+      return cutout.pair.map((shoe, index) => {
+        const width = Math.max(45, Math.min(65, 47 / aspect));
+        return garmentLayer(garment, shoe, shoeBox(shoe,fit.feet[index],fit.sole,width,74,aspect), index === 0 ? 'left' : 'right');
+      });
+    }
+    const [x,y,baseWidth,baseHeight] = fit[cat];
+    const {center, span} = cutout.anchor;
+    const anchorWidth = cat === 'top' ? baseWidth * .84 : baseWidth * .81;
+    const width = Math.max(baseWidth * .88, Math.min(baseWidth * 1.22, anchorWidth / span));
+    const height = garment.kind === 'skirt' ? baseHeight * .70 : baseHeight;
+    return [garmentLayer(garment, cutout, [x + baseWidth / 2 - width * center,y,width,height])];
+  }
+
+  function maskBase(group, paths) {
+    if (!paths.length) return;
+    const mask = document.createElementNS(NS, 'mask');
+    mask.id = 'fitting-base-mask';
+    mask.setAttribute('maskUnits', 'userSpaceOnUse');
+    mask.setAttribute('x', '0');
+    mask.setAttribute('y', '0');
+    mask.setAttribute('width', '400');
+    mask.setAttribute('height', '600');
+    mask.innerHTML = `<rect width="400" height="600" fill="white"/><path d="${paths.join(' ')}" fill="black"/>`;
+    const base = group.querySelector('[data-avatar-base]');
+    base.before(mask);
+    base.setAttribute('mask', `url(#${mask.id})`);
   }
 
   async function applyOutfitPhotos() {
     const revision = ++fittingRevision;
     controls.hidden = !active();
+    const canTurn = active() && !(photoMode && fullBodyPhoto);
+    angles.hidden = !canTurn;
+    turnButton.hidden = !canTurn;
+    stage.classList.toggle('turnable-model', canTurn);
     if (controls.hidden) return;
     for (const cat of categories) {
       const select = picker(cat);
@@ -151,22 +303,28 @@
     const usingPhoto = photoMode && fullBodyPhoto;
     const group = outfitGroup();
     if (!group) return;
-    const garments = ['bottom','top','shoes'].map(cat => item(state.selected[cat])).filter(Boolean);
+    const fit = usingPhoto ? null : modelFits[group.dataset.avatarProfile];
+    const garments = (fit ? ['shoes','bottom','top'] : ['bottom','top','shoes']).map(cat => item(state.selected[cat])).filter(Boolean);
     const status = $('#fittingPhotoStatus');
     status.textContent = '正在准备服装照片…';
     const sources = await Promise.all(garments.map(getCutout));
     if (revision !== fittingRevision || !group.isConnected) return;
     const missing = [];
+    const masks = [];
     sources.forEach((source, index) => {
       const garment = garments[index];
       if (!source) { missing.push(labels[garment.cat]); return; }
-      const [x,y,width,height] = overlayBox(garment, source, group, usingPhoto);
-      const layer = document.createElementNS(NS, 'image');
-      for (const [key,value] of Object.entries({x,y,width,height,href:source.src,preserveAspectRatio:'none','data-garment':garment.id})) layer.setAttribute(key,value);
-      group.insertBefore(layer, group.querySelector('[data-face-overlay]'));
+      for (const layer of fitLayers(garment, source, group, fit)) {
+        group.insertBefore(layer, group.querySelector('[data-face-overlay]'));
+      }
+      if (fit && garment.cat === 'top') masks.push(fit.shirt);
+      if (fit && garment.cat === 'shoes') masks.push(fit.footwear);
     });
-    status.textContent = missing.length ? `${missing.join('、')}未能去背景${usingPhoto ? '，原照片相应区域保留' : '，已保留轮廓示意'}。建议用纯色背景平铺拍摄。` : '';
-    $('#previewNote').textContent = '照片叠穿参考。可查看配色和款式，实际合身程度以试穿为准。';
+    if (fit) maskBase(group, masks);
+    status.textContent = missing.length ? `${missing.join('、')}照片背景未能分离。请用纯色背景平铺重拍后试穿。` : '';
+    $('#previewNote').textContent = fit
+      ? '选衣后自动试穿。拖动模特可看正面透视，实际合身度以实穿为准。'
+      : '全身照搭配预览。实际合身度以实穿为准。';
   }
 
   const previousRender = renderModel;
@@ -190,6 +348,7 @@
   }
   $('#openTryon').onclick = openFitting;
   $('#avatarNav').onclick = openFitting;
+  modelTab.click();
   for (const cat of categories) picker(cat).onchange = event => {
     state.selected[cat] = event.target.value;
     persist(); renderClothes(); renderModel();
