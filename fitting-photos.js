@@ -1,8 +1,8 @@
 (() => {
   const categories = ['top', 'bottom', 'shoes'];
   const labels = {top:'上衣', bottom:'下装', shoes:'鞋子'};
-  const modelZones = {top:[58,103,130,122], bottom:[88,208,70,167], shoes:[79,371,90,33]};
-  const photoZones = {top:[27,24,46,31], bottom:[34,51,32,40], shoes:[31,88,38,9]};
+  const modelZones = {top:[121,100,158,171], bottom:[131,262,138,293], shoes:[123,518,154,71]};
+  const photoZones = {top:[27,24,46,31], bottom:[34,51,32,40], shoes:[31,82,38,15]};
   const cutouts = new Map();
   const NS = 'http://www.w3.org/2000/svg';
   let fittingRevision = 0;
@@ -18,7 +18,7 @@
     </div><div class="fitting-actions"><button type="button" class="outline" id="randomFitting">随意搭一套</button><button type="button" class="outline" id="chooseFittingPhoto">用全身照试穿</button></div>
     <div id="fittingPhotoOptions" hidden><label>更换正面全身照<input type="file" id="fittingPhotoFile" accept="image/jpeg,image/png,image/webp"></label><p class="fitting-hint">请使用正面站立、头和鞋都入镜、人物居中的照片。衣服会按固定区域叠放。</p><button type="button" class="outline" id="clearFittingPhoto">删除全身照</button></div>
     <p role="status" id="fittingPhotoStatus" class="fitting-hint"></p>`;
-  $('.preview-tabs').after(controls);
+  $('.avatar-profile-picker').after(controls);
   const picker = category => controls.querySelector(`[data-fitting-cat="${category}"]`);
   const active = () => previewMode === 'shape';
 
@@ -95,7 +95,7 @@
     const output = document.createElement('canvas');
     [output.width, output.height] = bounds.slice(2);
     output.getContext('2d').drawImage(canvas, ...bounds, 0, 0, output.width, output.height);
-    return output.toDataURL('image/png');
+    return {src:output.toDataURL('image/png'), ratio:output.width / output.height};
   }
 
   function getCutout(garment) {
@@ -122,6 +122,23 @@
     return layer;
   }
 
+  function overlayBox(garment, cutout, group, usingPhoto) {
+    const box = (usingPhoto ? photoZones : modelZones)[garment.cat];
+    const [x,y,width,height] = box;
+    if (garment.cat !== 'shoes') {
+      if (garment.kind === 'skirt') return [x,y,width,height * .70];
+      return box;
+    }
+    // Match the physical image ratio after the model or photo viewport is scaled.
+    const viewport = usingPhoto ? group.getBoundingClientRect() : null;
+    const axisRatio = usingPhoto ? (viewport.width / viewport.height || fullBodyPhoto.width / fullBodyPhoto.height) :
+      Number(group.dataset.avatarScaleX || 1) / Number(group.dataset.avatarScaleY || 1);
+    const ratio = cutout.ratio / axisRatio;
+    const shoeWidth = Math.min(width, height * ratio);
+    const shoeHeight = shoeWidth / ratio;
+    return [x + (width - shoeWidth) / 2, y + height - shoeHeight, shoeWidth, shoeHeight];
+  }
+
   async function applyOutfitPhotos() {
     const revision = ++fittingRevision;
     controls.hidden = !active();
@@ -134,7 +151,6 @@
     const usingPhoto = photoMode && fullBodyPhoto;
     const group = outfitGroup();
     if (!group) return;
-    const zones = usingPhoto ? photoZones : modelZones;
     const garments = ['bottom','top','shoes'].map(cat => item(state.selected[cat])).filter(Boolean);
     const status = $('#fittingPhotoStatus');
     status.textContent = '正在准备服装照片…';
@@ -144,9 +160,9 @@
     sources.forEach((source, index) => {
       const garment = garments[index];
       if (!source) { missing.push(labels[garment.cat]); return; }
-      const [x,y,width,height] = zones[garment.cat];
+      const [x,y,width,height] = overlayBox(garment, source, group, usingPhoto);
       const layer = document.createElementNS(NS, 'image');
-      for (const [key,value] of Object.entries({x,y,width,height,href:source,preserveAspectRatio:'none','data-garment':garment.id})) layer.setAttribute(key,value);
+      for (const [key,value] of Object.entries({x,y,width,height,href:source.src,preserveAspectRatio:'none','data-garment':garment.id})) layer.setAttribute(key,value);
       group.insertBefore(layer, group.querySelector('[data-face-overlay]'));
     });
     status.textContent = missing.length ? `${missing.join('、')}未能去背景${usingPhoto ? '，原照片相应区域保留' : '，已保留轮廓示意'}。建议用纯色背景平铺拍摄。` : '';
