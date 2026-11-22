@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "一衣 YIYI · 每日穿搭",
+  "short_name": "一衣",
+  "description": "自己的衣橱、每日推荐、一周计划和实际穿着反馈。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8f9f6",
+  "theme_color": "#304d40",
+  "icons": [
+    {"src":"assets/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"assets/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"},
+    {"src":"assets/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}
+  ]
+}
