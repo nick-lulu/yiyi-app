@@ -80,6 +80,7 @@
     clip.append(oval);
     const photoLayer = document.createElementNS(SVG, 'image');
     for (const [key, value] of Object.entries({x:(52-width)*crop.x/100, y:(68-height)*crop.y/100, width, height, href:photo.src, 'clip-path':`url(#${id})`})) photoLayer.setAttribute(key, value);
+    mask.setAttribute('data-face-overlay','');
     mask.append(clip, photoLayer);
     group.append(mask);
   }
