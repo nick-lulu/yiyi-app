@@ -1,9 +1,60 @@
-const CACHE='yiyi-pwa-0.9.0';
-const CORE=['./','index.html','style.css','realism.css','trial.css','mobile.css','trial-core.js','daily-engine.js','app.js','realism.js','trial.js','pwa.js','mvp.css','wardrobe-storage.js','manifest.webmanifest','assets/wardrobe-photography.png','assets/icon-192.png','assets/icon-512.png'];
-self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(CACHE);await cache.addAll(CORE.map(p=>new Request(new URL(p,self.registration.scope),{cache:'reload'})));await self.skipWaiting()})()));
-self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const name of await caches.keys())if(name.startsWith('yiyi-pwa-')&&name!==CACHE)await caches.delete(name);await self.clients.claim()})()));
-self.addEventListener('fetch',event=>{
-  const url=new URL(event.request.url),scope=new URL(self.registration.scope);
-  if(event.request.method!=='GET'||url.origin!==scope.origin||!url.pathname.startsWith(scope.pathname)||url.pathname.includes('/api/'))return;
-  event.respondWith((async()=>{const cache=await caches.open(CACHE);try{const response=await fetch(event.request);if(response.ok&&response.type==='basic')await cache.put(event.request,response.clone());return response}catch{const saved=await cache.match(event.request);if(saved)return saved;if(event.request.mode==='navigate'){const index=await cache.match(new URL('index.html',scope));if(index)return index}return new Response('暂时离线。请联网打开一次一衣后重试。',{status:503,headers:{'Content-Type':'text/plain;charset=utf-8'}})}})());
+const VERSION = '0.9.1';
+const CACHE = 'yiyi-pwa-' + VERSION;
+const INDEX = 'index.html';
+const CORE = [
+  INDEX, `mvp-${VERSION}.css`, `mvp-${VERSION}.js`, 'manifest.webmanifest',
+  'assets/wardrobe-preview.jpg', 'assets/icon-192.png', 'assets/icon-512.png', 'assets/icon.svg'
+];
+const SCOPE = new URL(self.registration.scope);
+const FILES = new Map(CORE.map(file => [new URL(file, SCOPE).pathname, new URL(file, SCOPE).href]));
+const SHELL = FILES.get(new URL(INDEX, SCOPE).pathname);
+
+self.addEventListener('install', event => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll([...FILES.values()].map(url => new Request(url, {
+      cache:url === SHELL ? 'reload' : 'default'
+    })));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(names.filter(name => name.startsWith('yiyi-pwa-') && name !== CACHE)
+      .map(name => caches.delete(name)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', event => {
+  const {request} = event;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== SCOPE.origin) return;
+  const file = FILES.get(url.pathname);
+  if (request.mode === 'navigate' && (url.pathname === SCOPE.pathname || file === SHELL)) {
+    const existing = caches.open(CACHE).then(cache => cache.match(SHELL));
+    // Keep each cached document paired with the bundles from its own release.
+    const network = fetch(request).catch(() => null);
+    event.respondWith((async () => {
+      const cached = await existing;
+      if (!cached) {
+        const fresh = await network;
+        return fresh || new Response('暂时离线，请联网打开一衣后再试。', {status:503});
+      }
+      let timer;
+      try {
+        const result = await Promise.race([network, new Promise(resolve => { timer = setTimeout(resolve, 1500); })]);
+        return result?.ok ? result : cached;
+      } finally {
+        clearTimeout(timer);
+      }
+    })());
+    return;
+  }
+  if (file && file !== SHELL) {
+    event.respondWith((async () => (await (await caches.open(CACHE)).match(file)) || fetch(request))());
+  }
 });
