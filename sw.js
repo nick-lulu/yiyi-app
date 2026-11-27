@@ -1,4 +1,4 @@
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 const CACHE = 'yiyi-pwa-' + VERSION;
 const INDEX = 'index.html';
 const CORE = [
